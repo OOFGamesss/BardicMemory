@@ -1,0 +1,73 @@
+name: Plugin Update Alert
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  send_alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Send Discord Webhook
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MANIFEST=BardicMemory/BardicMemory.json
+
+          NAME=$(jq -r '.Name' "$MANIFEST")
+          CHANGELOG=$(jq -r '.Changelog' "$MANIFEST")
+          ICON_URL=$(jq -r '.IconUrl // empty' "$MANIFEST")
+
+          if [ -n "$ICON_URL" ] && [ "$ICON_URL" != "null" ]; then
+            ICON_FILE=$(basename "${ICON_URL%%[?]*}")
+            ICON_API="https://api.github.com/repos/OOFGamesss/OOFGamesPlugins/contents/images/$ICON_FILE"
+            ICON_SHA=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$ICON_API" | jq -r '.sha // empty' | cut -c1-8)
+            if [ -n "$ICON_SHA" ]; then
+              case "$ICON_URL" in
+                *[?]*) ICON_URL="$ICON_URL&v=$ICON_SHA" ;;
+                *) ICON_URL="$ICON_URL?v=$ICON_SHA" ;;
+              esac
+            fi
+            echo "Icon: $ICON_URL"
+          fi
+
+          NEW_VERSION=$(grep -oPm1 '(?<=<Version>)[^<]+' BardicMemory/BardicMemory.csproj || echo "0.0.0.1")
+
+          EMBED_COLOR=15548997
+
+          if [ -z "$CHANGELOG" ] || [ "$CHANGELOG" == "null" ] || [ "$CHANGELOG" == "" ]; then
+            CHANGELOG="*No changelog provided.*"
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg name "$NAME" \
+            --arg ver "$NEW_VERSION" \
+            --arg cl "$CHANGELOG" \
+            --arg icon "$ICON_URL" \
+            --arg footer_icon "https://raw.githubusercontent.com/OOFGamesss/OOFGamesPlugins/main/images/oofgameslogo2.png" \
+            --argjson color "$EMBED_COLOR" \
+            '{
+              username: "OOF Games Plugin Updates",
+              embeds: [({
+                title: "🚀 Update: \($name)",
+                color: $color,
+                fields: [
+                  { name: "New Version", value: $ver, inline: true },
+                  { name: "Changelog", value: $cl, inline: false },
+                  { name: "Download here:", value: "Dalamud Store", inline: false }
+                ],
+                footer: {
+                  text: "Play Hard, Win Big",
+                  icon_url: $footer_icon
+                },
+                timestamp: (now | todate)
+              } + (if $icon != "" and $icon != "null" then {thumbnail: {url: $icon}} else {} end))]
+            }')
+
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
